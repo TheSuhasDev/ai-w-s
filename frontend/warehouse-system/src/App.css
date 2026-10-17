@@ -59,7 +59,7 @@ nav button:hover,nav button.active { color:#fff; background:#1f304a; }
 .invoice-actions { display:flex; justify-content:flex-end; gap:9px; margin-bottom:28px; }
 .invoice-actions .button.secondary { width:auto; margin:0; }
 .invoice-header { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
-.invoice-logo { display:block; width:68px; height:68px; object-fit:contain; object-position:left center; margin-bottom:3px; }
+.invoice-logo { display:block; width:140px; height:auto; max-height:120px; object-fit:contain; object-position:left center; margin-bottom:8px; }
 .invoice-company { margin:0; color:#102d50; font:700 24px "Space Grotesk",sans-serif; letter-spacing:.3px; }
 .invoice-document-title { margin:9px 0 0; color:#52657b; font-size:12px; font-weight:700; letter-spacing:2px; }
 .invoice-meta { min-width:190px; margin:0; font-size:12px; }

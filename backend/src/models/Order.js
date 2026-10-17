@@ -39,8 +39,22 @@ const orderSchema = new mongoose.Schema(
       default: "PROCESSING",
       index: true,
     },
+    packedAt: Date,
     dispatchedAt: Date,
     cancelledAt: Date,
+    lastReminderAt: Date,
+    reminders: [
+      {
+        sentAt: { type: Date, default: Date.now },
+        channel: {
+          type: String,
+          enum: ["WHATSAPP", "EMAIL", "CALL", "MANUAL"],
+          required: true,
+        },
+        note: { type: String, default: "" },
+        sentBy: { type: String, default: "" },
+      },
+    ],
   },
   { timestamps: true }
 );
@@ -62,9 +76,24 @@ orderSchema.pre("validate", function updatePaymentFields() {
   }
 });
 
+export const markOrderPacked = (order) => {
+  order.status = "PACKED";
+  if (!order.packedAt) {
+    order.packedAt = new Date();
+  }
+};
+
 export const migrateOrderStatuses = async () => {
   await Order.updateMany({ status: "PAYMENT_CONFIRMED" }, { $set: { status: "ADVANCE_RECEIVED" } });
   await Order.updateMany({ status: { $in: ["PACKING", "READY_FOR_DISPATCH"] } }, { $set: { status: "PACKED" } });
+
+  // Fallback for existing PACKED orders without packedAt
+  const packedWithoutDate = await Order.find({ status: "PACKED", packedAt: { $exists: false } });
+  for (const order of packedWithoutDate) {
+    order.packedAt = order.updatedAt || order.createdAt || new Date();
+    await order.save();
+  }
+
   const legacyOrders = await Order.find({
     $or: [{ advancePercentage: { $exists: false } }, { advanceRequired: { $exists: false } }],
   });

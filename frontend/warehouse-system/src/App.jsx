@@ -83,21 +83,21 @@ async function predictImage(blob, signal) {
     response = await fetch(`${AI_API_URL}/predict`, { method: "POST", body: form, signal });
   } catch (error) {
     if (error.name === "AbortError") throw error;
-    console.error("AI prediction network error", {
+    console.error("Vision prediction network error", {
       endpoint: `${AI_API_URL}/predict`,
       errorName: error.name,
     });
-    throw new Error("AI service unavailable. Make sure the FastAPI server is running.", { cause: error });
+    throw new Error("Vision service unavailable. Make sure the backend server is running.", { cause: error });
   }
 
   const result = await response.json().catch(() => null);
   if (!response.ok) {
-    console.error("AI prediction HTTP error:", response.status, result);
-    throw new Error(result?.detail || "AI prediction request failed.");
+    console.error("Prediction HTTP error:", response.status, result);
+    throw new Error(result?.detail || "Prediction request failed.");
   }
   if (!result || !Array.isArray(result.detections)) {
-    console.error("AI prediction invalid response:", result);
-    throw new Error("AI service returned an invalid prediction response.");
+    console.error("Prediction invalid response:", result);
+    throw new Error("Vision service returned an invalid prediction response.");
   }
   return result;
 }
@@ -117,7 +117,7 @@ function App() {
 
   const pageTitles = {
     dashboard: ["Dashboard", "Operational overview and warehouse activity"],
-    receive: ["Receive stock", "Use AI vision to count incoming tools"],
+    receive: ["Receive stock", "Use vision camera to count incoming tools"],
     dispatch: ["Dispatch stock", "Build an order, verify inventory, and create an invoice"],
     orders: ["Orders", "Track payment, packing, and dispatch lifecycle"],
     inventory: ["Inventory", "Current stock levels and storage locations"],
@@ -339,7 +339,7 @@ function CameraScanner({ onDetections, active, onError }) {
         }
         streamRef.current = stream;
         if (videoRef.current) videoRef.current.srcObject = stream;
-        setStatus("AI camera ready");
+        setStatus("Camera ready");
         timerRef.current = setInterval(scan, 1200);
       } catch (error) {
         if (!cancelled) onError?.(error.message || "Camera permission was denied or no camera is available.");
@@ -387,7 +387,7 @@ function Receive({ onChanged }) {
     locks.current = nextLocks;
   }, [onChanged, products]);
 
-  return <div className="scanner-layout"><section className="panel scanner-panel"><SectionHeader title="AI receiving station" action="Confidence threshold 70% · 3 stable frames" />{!active ? <div className="camera-placeholder"><div className="camera-symbol">◉</div><h2>AI Camera Scanner</h2><p>Point the camera at a warehouse product. Stable detections are counted once until the product leaves the frame.</p><button className="button primary" onClick={() => { setMessage(""); setActive(true); }}>Start camera</button></div> : <><CameraScanner active={active} onDetections={handleDetections} onError={setMessage} /><button className="button secondary" onClick={() => setActive(false)}>Stop camera</button></>}</section><section className="panel result-panel"><p className="eyebrow">LATEST RECEIVE</p>{lastResult ? <><div className="detection-card"><ProductIcon name={lastResult.name} /><div><span>Detected product</span><h2>{lastResult.name}</h2><small>SKU {PRODUCT_CLASSES[lastResult.name.toLowerCase()] || "—"}</small></div><span className="result-check">✓</span></div><div className="confidence-row"><span>Confidence</span><strong>{(lastResult.confidence * 100).toFixed(1)}%</strong></div><div className="stock-result"><span>+1 stock added · Updated stock</span><strong>{lastResult.stock} units</strong></div></> : <div className="empty"><span className="empty-icon">◉</span><strong>NO VALID PRODUCT DETECTED</strong><small>Hold one supported tool inside the scan area for three stable frames.</small></div>}{message && <div className="inline-error">{message}</div>}</section></div>;
+  return <div className="scanner-layout"><section className="panel scanner-panel"><SectionHeader title="Receiving station" action="Confidence threshold 70% · 3 stable frames" />{!active ? <div className="camera-placeholder"><div className="camera-symbol">◉</div><h2>Camera Scanner</h2><p>Point the camera at a warehouse product. Stable detections are counted once until the product leaves the frame.</p><button className="button primary" onClick={() => { setMessage(""); setActive(true); }}>Start camera</button></div> : <><CameraScanner active={active} onDetections={handleDetections} onError={setMessage} /><button className="button secondary" onClick={() => setActive(false)}>Stop camera</button></>}</section><section className="panel result-panel"><p className="eyebrow">LATEST RECEIVE</p>{lastResult ? <><div className="detection-card"><ProductIcon name={lastResult.name} /><div><span>Detected product</span><h2>{lastResult.name}</h2><small>SKU {PRODUCT_CLASSES[lastResult.name.toLowerCase()] || "—"}</small></div><span className="result-check">✓</span></div><div className="confidence-row"><span>Confidence</span><strong>{(lastResult.confidence * 100).toFixed(1)}%</strong></div><div className="stock-result"><span>+1 stock added · Updated stock</span><strong>{lastResult.stock} units</strong></div></> : <div className="empty"><span className="empty-icon">◉</span><strong>NO VALID PRODUCT DETECTED</strong><small>Hold one supported tool inside the scan area for three stable frames.</small></div>}{message && <div className="inline-error">{message}</div>}</section></div>;
 }
 
 function Dispatch({ onChanged }) {
@@ -426,7 +426,7 @@ function Dispatch({ onChanged }) {
       window.dispatchEvent(new CustomEvent("wms-navigate", { detail: "orders" }));
     } catch (error) { setMessage(error.message); }
   };
-  return <div className="dispatch-layout"><section className="panel scanner-panel"><SectionHeader title="AI dispatch scanner" action="Order creation does not reduce stock" />{!active ? <div className="camera-placeholder compact"><div className="camera-symbol">◉</div><h2>AI Camera Scanner</h2><p>Identify tools and add them to the temporary order cart.</p><button className="button primary" onClick={() => { setMessage(""); setActive(true); }}>Start camera</button></div> : <><CameraScanner active={active} onDetections={addDetection} onError={setMessage} /><button className="button secondary" onClick={() => setActive(false)}>Stop camera</button></>}</section><section className="panel cart-panel"><SectionHeader title="New order cart" action={`${cart.reduce((sum, item) => sum + item.quantity, 0)} units`} />{cart.length ? <div className="cart-items">{cart.map((item) => <div className="cart-item" key={item._id}><div><strong>{item.name}</strong><small>{item.sku} · {currency(item.sellingPrice)} each · stock {item.stock}</small></div><input type="number" min="1" value={item.quantity} onChange={(event) => updateQuantity(item._id, event.target.value)} /><button className="icon-button" onClick={() => setCart((current) => current.filter((entry) => entry._id !== item._id))}>×</button></div>)}</div> : <div className="empty">Your cart is empty. Use the camera or add a product manually below.</div>}<select className="field" value="" onChange={(event) => { const product = products.find((item) => item._id === event.target.value); if (product) setCart((current) => [...current, { ...product, quantity: 1 }]); }}><option value="">+ Add product manually</option>{products.map((product) => <option key={product._id} value={product._id}>{product.name} · {product.stock} in stock</option>)}</select>{cart.length > 0 && <><div className="total-row"><span>Order total</span><strong>{currency(total)}</strong></div><div className="client-form"><p className="eyebrow">CLIENT DETAILS</p><input className="field" placeholder="Client / company name *" value={client.name} onChange={(e) => setClient({ ...client, name: e.target.value })} /><input className="field" placeholder="Phone number *" value={client.phone} onChange={(e) => setClient({ ...client, phone: e.target.value })} /><textarea className="field" placeholder="Delivery address *" value={client.address} onChange={(e) => setClient({ ...client, address: e.target.value })} /><input className="field" placeholder="GSTIN (optional)" value={client.gstin} onChange={(e) => setClient({ ...client, gstin: e.target.value })} /><button className="button primary" onClick={createOrder}>Create order</button></div></>}</section><section className="panel"><SectionHeader title="Recent orders" action="Invoice access" />{recentOrders.map((order) => <div className="recent-order-row" key={order._id}><div><strong>{order.orderNumber}</strong><small>{order.client.name} · {statusLabel(order.status)}</small></div><button className="link-button" onClick={() => window.dispatchEvent(new CustomEvent("wms-show-invoice", { detail: buildInvoice(order) }))}>View invoice</button></div>)}</section>{message && <div className="toast error-state">{message}</div>}</div>;
+  return <div className="dispatch-layout"><section className="panel scanner-panel"><SectionHeader title="Dispatch scanner" action="Order creation does not reduce stock" />{!active ? <div className="camera-placeholder compact"><div className="camera-symbol">◉</div><h2>Camera Scanner</h2><p>Identify tools and add them to the temporary order cart.</p><button className="button primary" onClick={() => { setMessage(""); setActive(true); }}>Start camera</button></div> : <><CameraScanner active={active} onDetections={addDetection} onError={setMessage} /><button className="button secondary" onClick={() => setActive(false)}>Stop camera</button></>}</section><section className="panel cart-panel"><SectionHeader title="New order cart" action={`${cart.reduce((sum, item) => sum + item.quantity, 0)} units`} />{cart.length ? <div className="cart-items">{cart.map((item) => <div className="cart-item" key={item._id}><div><strong>{item.name}</strong><small>{item.sku} · {currency(item.sellingPrice)} each · stock {item.stock}</small></div><input type="number" min="1" value={item.quantity} onChange={(event) => updateQuantity(item._id, event.target.value)} /><button className="icon-button" onClick={() => setCart((current) => current.filter((entry) => entry._id !== item._id))}>×</button></div>)}</div> : <div className="empty">Your cart is empty. Use the camera or add a product manually below.</div>}<select className="field" value="" onChange={(event) => { const product = products.find((item) => item._id === event.target.value); if (product) setCart((current) => [...current, { ...product, quantity: 1 }]); }}><option value="">+ Add product manually</option>{products.map((product) => <option key={product._id} value={product._id}>{product.name} · {product.stock} in stock</option>)}</select>{cart.length > 0 && <><div className="total-row"><span>Order total</span><strong>{currency(total)}</strong></div><div className="client-form"><p className="eyebrow">CLIENT DETAILS</p><input className="field" placeholder="Client / company name *" value={client.name} onChange={(e) => setClient({ ...client, name: e.target.value })} /><input className="field" placeholder="Phone number *" value={client.phone} onChange={(e) => setClient({ ...client, phone: e.target.value })} /><textarea className="field" placeholder="Delivery address *" value={client.address} onChange={(e) => setClient({ ...client, address: e.target.value })} /><input className="field" placeholder="GSTIN (optional)" value={client.gstin} onChange={(e) => setClient({ ...client, gstin: e.target.value })} /><button className="button primary" onClick={createOrder}>Create order</button></div></>}</section><section className="panel"><SectionHeader title="Recent orders" action="Invoice access" />{recentOrders.map((order) => <div className="recent-order-row" key={order._id}><div><strong>{order.orderNumber}</strong><small>{order.client.name} · {statusLabel(order.status)}</small></div><button className="link-button" onClick={() => window.dispatchEvent(new CustomEvent("wms-show-invoice", { detail: buildInvoice(order) }))}>View invoice</button></div>)}</section>{message && <div className="toast error-state">{message}</div>}</div>;
 }
 
 function buildInvoice(order) {

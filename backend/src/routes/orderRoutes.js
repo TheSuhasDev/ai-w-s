@@ -1,12 +1,17 @@
 import express from "express";
 import mongoose from "mongoose";
-import Order from "../models/Order.js";
+import Order, { markOrderPacked } from "../models/Order.js";
 import Payment from "../models/Payment.js";
 import Product from "../models/Product.js";
 import StockMovement from "../models/StockMovement.js";
 import { DEFAULT_ADVANCE_PERCENTAGE } from "../config/orderSettings.js";
+import { requireAuth, requireRole } from "../middleware/auth.js";
 
 const router = express.Router();
+
+// Apply requireAuth to every /api/orders route
+router.use(requireAuth);
+
 const statuses = ["PROCESSING", "ADVANCE_RECEIVED", "PACKED", "DISPATCHED", "CANCELLED"];
 const isId = (value) => mongoose.isValidObjectId(value);
 const positiveInteger = (value) => Number.isInteger(Number(value)) && Number(value) > 0;
@@ -24,6 +29,7 @@ const getOrder = async (id, res) => {
   return order;
 };
 
+// Create order (STAFF & ADMIN)
 router.post("/", async (req, res) => {
   try {
     const { client = {}, items } = req.body;
@@ -68,16 +74,87 @@ router.post("/", async (req, res) => {
   }
 });
 
+// View orders (STAFF & ADMIN)
 router.get("/", async (req, res) => {
   try {
     const filter = req.query.status && statuses.includes(req.query.status) ? { status: req.query.status } : {};
     const orders = await Order.find(filter).sort({ createdAt: -1 });
-    return res.json({ success: true, orders });
+    const thresholdDays = Number(process.env.REMINDER_AFTER_DAYS) || 3;
+
+    const formattedOrders = orders.map((order) => {
+      const orderObj = order.toObject();
+      const effectivePackedAt = orderObj.packedAt || (orderObj.status === "PACKED" ? orderObj.updatedAt || orderObj.createdAt : null);
+      const daysPending = effectivePackedAt && orderObj.status === "PACKED"
+        ? Math.max(0, Math.floor((Date.now() - new Date(effectivePackedAt).getTime()) / (24 * 60 * 60 * 1000)))
+        : 0;
+      const isOverdue = orderObj.status === "PACKED" && orderObj.balanceAmount > 0 && daysPending >= thresholdDays;
+
+      return {
+        ...orderObj,
+        packedAt: effectivePackedAt,
+        daysPending,
+        isOverdue,
+      };
+    });
+
+    return res.json({ success: true, orders: formattedOrders });
   } catch (error) {
     return res.status(500).json({ message: "Unable to load orders", error: error.message });
   }
 });
 
+// Overdue payments for packed orders (STAFF & ADMIN)
+router.get("/overdue-payments", async (req, res) => {
+  try {
+    const defaultDays = Number(process.env.REMINDER_AFTER_DAYS) || 3;
+    const daysParam = req.query.days ? Number(req.query.days) : defaultDays;
+    const thresholdDays = Number.isFinite(daysParam) && daysParam >= 0 ? daysParam : defaultDays;
+
+    const cutoffDate = new Date(Date.now() - thresholdDays * 24 * 60 * 60 * 1000);
+
+    const orders = await Order.find({
+      status: "PACKED",
+      balanceAmount: { $gt: 0 },
+      $or: [
+        { packedAt: { $lte: cutoffDate } },
+        { packedAt: { $exists: false }, updatedAt: { $lte: cutoffDate } },
+      ],
+    }).sort({ packedAt: 1, updatedAt: 1, createdAt: 1 });
+
+    const overdueOrders = orders.map((order) => {
+      const effectivePackedAt = order.packedAt || order.updatedAt || order.createdAt;
+      const daysPending = Math.max(
+        0,
+        Math.floor((Date.now() - new Date(effectivePackedAt).getTime()) / (24 * 60 * 60 * 1000))
+      );
+
+      return {
+        _id: order._id,
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        clientName: order.client?.name || "Unknown Client",
+        phone: order.client?.phone || "",
+        balance: order.balanceAmount,
+        total: order.totalAmount,
+        daysPending,
+        packedAt: effectivePackedAt,
+        lastReminderAt: order.lastReminderAt || null,
+        reminderCount: Array.isArray(order.reminders) ? order.reminders.length : 0,
+      };
+    });
+
+    return res.json({
+      success: true,
+      thresholdDays,
+      count: overdueOrders.length,
+      orders: overdueOrders,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Unable to load overdue payments", error: error.message });
+  }
+});
+
+// View payments history (STAFF & ADMIN)
 router.get("/payments/history", async (req, res) => {
   try {
     const payments = await Payment.find().populate("order", "orderNumber client").sort({ createdAt: -1 });
@@ -87,18 +164,32 @@ router.get("/payments/history", async (req, res) => {
   }
 });
 
+// View single order (STAFF & ADMIN)
 router.get("/:id", async (req, res) => {
   try {
     const order = await getOrder(req.params.id, res);
     if (order) {
       const payments = await Payment.find({ order: order._id }).sort({ createdAt: -1 });
-      return res.json({ ...order.toObject(), payments });
+      const orderObj = order.toObject();
+      const effectivePackedAt = orderObj.packedAt || (orderObj.status === "PACKED" ? orderObj.updatedAt || orderObj.createdAt : null);
+      const daysPending = effectivePackedAt && orderObj.status === "PACKED"
+        ? Math.max(0, Math.floor((Date.now() - new Date(effectivePackedAt).getTime()) / (24 * 60 * 60 * 1000)))
+        : 0;
+
+      return res.json({
+        ...orderObj,
+        packedAt: effectivePackedAt,
+        daysPending,
+        payments,
+        reminders: orderObj.reminders || [],
+      });
     }
   } catch (error) {
     return res.status(500).json({ message: "Unable to load order", error: error.message });
   }
 });
 
+// View order payments (STAFF & ADMIN)
 router.get("/:id/payments", async (req, res) => {
   try {
     const order = await getOrder(req.params.id, res);
@@ -109,6 +200,7 @@ router.get("/:id/payments", async (req, res) => {
   }
 });
 
+// Record payments (STAFF & ADMIN)
 router.post("/:id/payments", async (req, res) => {
   const session = await mongoose.startSession();
   try {
@@ -145,6 +237,56 @@ router.post("/:id/payments", async (req, res) => {
   }
 });
 
+// Record payment reminder (STAFF & ADMIN)
+router.post("/:id/reminders", async (req, res) => {
+  try {
+    const { channel = "WHATSAPP", note = "" } = req.body;
+    const allowedChannels = ["WHATSAPP", "EMAIL", "CALL", "MANUAL"];
+    if (!allowedChannels.includes(channel)) {
+      return orderError(res, 400, `Invalid channel. Allowed channels: ${allowedChannels.join(", ")}`);
+    }
+
+    const order = await getOrder(req.params.id, res);
+    if (!order) return;
+
+    if (order.status !== "PACKED") {
+      return orderError(res, 400, "Reminders can only be recorded for PACKED orders");
+    }
+
+    if (order.balanceAmount <= 0) {
+      return orderError(res, 400, "Order has no pending balance");
+    }
+
+    const sentBy = req.user?.name || req.user?.email || "Staff";
+    const sentAt = new Date();
+
+    const reminderEntry = {
+      sentAt,
+      channel,
+      note: String(note || "").trim(),
+      sentBy,
+    };
+
+    if (!Array.isArray(order.reminders)) {
+      order.reminders = [];
+    }
+    order.reminders.push(reminderEntry);
+    order.lastReminderAt = sentAt;
+
+    await order.save();
+
+    return res.status(201).json({
+      success: true,
+      message: "Reminder recorded successfully",
+      reminder: reminderEntry,
+      lastReminderAt: order.lastReminderAt,
+      reminders: order.reminders,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Failed to record reminder", error: error.message });
+  }
+});
+
 const transition = (from, to, action, validation) => async (req, res) => {
   try {
     const order = await getOrder(req.params.id, res);
@@ -154,7 +296,11 @@ const transition = (from, to, action, validation) => async (req, res) => {
       const validationMessage = validation(order);
       if (validationMessage) return orderError(res, 400, validationMessage);
     }
-    order.status = to;
+    if (to === "PACKED") {
+      markOrderPacked(order);
+    } else {
+      order.status = to;
+    }
     await order.save();
     return res.json(order);
   } catch (error) {
@@ -162,17 +308,18 @@ const transition = (from, to, action, validation) => async (req, res) => {
   }
 };
 
-router.patch("/:id/pack", transition("ADVANCE_RECEIVED", "PACKED", "pack order", (order) => (
+// Admin action endpoints
+router.patch("/:id/pack", requireRole("ADMIN"), transition("ADVANCE_RECEIVED", "PACKED", "pack order", (order) => (
   order.totalPaid < order.advanceRequired ? `Advance of ${order.advanceRequired} is required before packing` : ""
 )));
-router.patch("/:id/confirm-payment", transition("PROCESSING", "ADVANCE_RECEIVED", "confirm advance", (order) => (
+router.patch("/:id/confirm-payment", requireRole("ADMIN"), transition("PROCESSING", "ADVANCE_RECEIVED", "confirm advance", (order) => (
   order.totalPaid < order.advanceRequired ? `Advance of ${order.advanceRequired} is required` : ""
 )));
-router.patch("/:id/start-packing", transition("ADVANCE_RECEIVED", "PACKED", "pack order"));
-router.patch("/:id/complete-packing", transition("ADVANCE_RECEIVED", "PACKED", "pack order"));
-router.patch("/:id/ready", transition("PACKED", "PACKED", "keep order packed"));
-router.patch("/:id/ready-for-dispatch", transition("PACKED", "PACKED", "keep order packed"));
-router.patch("/:id/cancel", async (req, res) => {
+router.patch("/:id/start-packing", requireRole("ADMIN"), transition("ADVANCE_RECEIVED", "PACKED", "pack order"));
+router.patch("/:id/complete-packing", requireRole("ADMIN"), transition("ADVANCE_RECEIVED", "PACKED", "pack order"));
+router.patch("/:id/ready", requireRole("ADMIN"), transition("PACKED", "PACKED", "keep order packed"));
+router.patch("/:id/ready-for-dispatch", requireRole("ADMIN"), transition("PACKED", "PACKED", "keep order packed"));
+router.patch("/:id/cancel", requireRole("ADMIN"), async (req, res) => {
   try {
     const order = await getOrder(req.params.id, res);
     if (!order) return;
@@ -186,7 +333,7 @@ router.patch("/:id/cancel", async (req, res) => {
   }
 });
 
-router.patch("/:id/dispatch", async (req, res) => {
+router.patch("/:id/dispatch", requireRole("ADMIN"), async (req, res) => {
   const session = await mongoose.startSession();
   try {
     let dispatchedOrder;

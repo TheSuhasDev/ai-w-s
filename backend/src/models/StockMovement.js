@@ -19,6 +19,11 @@ const stockMovementSchema = new mongoose.Schema(
       required: true,
       min: 1,
     },
+
+    note: {
+      type: String,
+      trim: true,
+    },
   },
   {
     timestamps: true,

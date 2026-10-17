@@ -4,18 +4,24 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-  "dev": "nodemon src/server.js",
-  "start": "node src/server.js",
-  "lint": "eslint ."
-},
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "seed:users": "node src/seedUsers.js",
+    "seed:demo-movements": "node src/seedMovements.js",
+    "lint": "eslint ."
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@google/genai": "^2.30.0",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^18.0.5",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.7.1",
+    "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.10.4"
   },
   "devDependencies": {
